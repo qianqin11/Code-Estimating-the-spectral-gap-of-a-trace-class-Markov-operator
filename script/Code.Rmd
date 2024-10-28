@@ -1,0 +1,159 @@
+---
+title: "Estimating the second largest eigenvalue of a data augmentation algorithm using the sums of powers of eigenvalues"
+author: "Qian Qin"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Introduction
+
+Suppose that we have a data augmentation transition density
+$$
+p(u,u') = \int_{E_2} f_{V|U}(v|u) f_{U|V}(u'|v) \, dv, \quad u, u' \in E_1.
+$$
+Let $\lambda_0, \lambda_1, \dots$ be the eigenvalues of the corresponding operator, in descending order.
+Then $\lambda_0 = 1$, and $\lambda_i \geq 0$.
+Recall that $1- \lambda_1$ is called the spectral gap.
+Assume that $\int_{E_1} p(u,u) \, du < \infty$, so that the operator is trace-class.
+For $k = 0,1,2,\dots$, let $s_k = \sum_{i=0}^{\infty} \lambda_i^k$.
+Then, for any positive $k$,
+$$
+\frac{s_k-1}{s_{k-1}-1} \leq \lambda_1 \leq (s_k - 1)^{1/k}.
+$$
+As $k \to \infty$, both $s_k$ and $l_k$ converge to $\lambda_1$.
+
+Below is an algorithm for estimating $l_k$ and $u_k$, which can in turn be used to estimate the second largest eigenvalue $\lambda_1$.
+
+
+
+
+
+### The Algorithm
+
+To estimate $s_k$ and thus $l_k$ and $u_k$ for a positive $k$, we need to choose a probability density function $\psi(\cdot)$ on $E_1$.
+Ideally, $\psi(\cdot)$ may be chosen so that it behaves somewhat similarly to the stationary density of the Markov chain, and it should have relatively heavy tails.
+In fact, a sufficient condition for the estimation to have finite variance is
+$$
+\int_{E_1} \int_{E_2} \frac{f_{U|V}(u|v)^3 f_{V|U}(v|u) }{\psi(u)^2} \, dv \, du < \infty.
+$$
+
+The following Monte Carlo algorithm can be used to estimate $l_k$ and $u_k$.
+Lines with "###" after them need to be adapted to the algorithm in consideration.
+
+```{r, eval=FALSE}
+eigenbound <- function(k, N) {
+  # N is the Monte Carlo sample size
+  
+  # generate a Monte Carlo sample for calculating s_j, j=1,...,k
+  sk.sample <- matrix(rep(0,k*N), ncol=k)
+  # The ijth element of sk stores the ith member of the Monte Carlo sample for calculating s_j
+  # the following loop may be run in parallel
+  for (i in 1:N) {
+    draw u from \psi(\cdot) ###
+    u1 <- u
+    for (j in 1:k) {
+      draw v from f_{V|U}(\cdot|u1) ###
+      sk.sample[i,j] <- f_{U|V}(u|v)/\psi(u) ###
+      update u1 by drawing from f_{U|V}(\cdot|v) ###
+    } 
+  }
+  # calculate s_j for j=1,...,k
+  sk <- apply(sk.sample, 2, mean)
+  sk.sd <- apply(sk.sample, 2, sd)
+  # calculate uk, lk, and their asymptotic standard deviation (through the delta method)
+  uk <- rep(0,k)
+  lk <- rep(0,k)
+  uk.sd <- rep(0,k)
+  lk.sd <- rep(0,k)
+  for (j in 1:k) {
+    uk[j] <- (sk[j]-1)^(1/j)
+    uk.sd[j] <- abs((1/j)*(sk[j]-1)^(1/j-1))*sk.sd[j]/sqrt(N)
+    if (j==1) {
+      lk[j] <- 0
+      lk.sd[j] <- 0
+    } else {
+      lk[j] <- (sk[j]-1)/(sk[j-1]-1)
+      sk.cov <- cov(sk.sample[,j], sk.sample[,j-1])
+      sk.cov.mat <- matrix( c(sk.sd[j-1]^2, sk.cov, sk.cov, sk.sd[j]^2), ncol=2)
+      lk.sd[j] <- sqrt( rbind(c( -(sk[j]-1)/(sk[j-1]-1)^2, 1/(sk[j-1]-1) ))%*%
+                        sk.cov.mat  %*%
+                        cbind(c( -(sk[j]-1)/(sk[j-1]-1)^2, 1/(sk[j-1]-1) )) /N )
+    }
+  }
+  result <- rbind(sk, lk, uk, lk.sd, uk.sd)
+  colnames(result) <- seq(1,k)
+  return(result)
+  # return s_j, l_j, u_j, and the asymptotic standadard deviations of l_j and u_j for j=1,...,k
+}
+```
+
+
+### Example
+
+Let $f_{V|U}(\cdot|u)$ be the pdf of the $N(u/2, 1/8)$ distribution, and let $f_{U|V}(\cdot|v)$ be that of the $N(v, 1/4)$ distribution.
+This corresponds to a data augmentation chain targeting the $N(0,1/2)$ distribution.
+
+Let $\psi(\cdot)$ be the pdf of the $t$ distribution with 10 degrees of freedom.
+(This is not necessarily the best choice, and is used only for illustration.)
+We may then obtain $l_k$ and $u_k$ using the following chunk of code.
+Note that we will only estimate $l_k$ and $u_k$ up to $k = 5$.
+This is because, if $k$ is too large, $s_k$ will be very close to 1, and the signal to noise ratio in our estimators for $u_k$ and $l_k$ will be too small.
+
+```{r}
+
+eigenbound <- function(k, N) {
+  # N is the Monte Carlo sample size
+  
+  # generate a Monte Carlo sample for calculating s_j, j=1,...,k
+  sk.sample <- matrix(rep(0,k*N), ncol=k)
+  # The ijth element of sk stores the ith member of the Monte Carlo sample for calculating s_j
+  # the following loop may be run in parallel
+  for (i in 1:N) {
+    u <- rt(1,df=10) ###
+    u1 <- u
+    for (j in 1:k) {
+      v <- rnorm(1, u1/2, sd=sqrt(1/8)) ###
+      sk.sample[i,j] <- dnorm(u, v, sd=sqrt(1/4))/dt(u,df=10) ###
+      u1 <- rnorm(1, v, sd=sqrt(1/4)) ###
+    } 
+  }
+  # calculate s_j for j=1,...,k
+  sk <- apply(sk.sample, 2, mean)
+  sk.sd <- apply(sk.sample, 2, sd)
+  # calculate uk, lk, and their asymptotic standard deviation (through the delta method)
+  uk <- rep(0,k)
+  lk <- rep(0,k)
+  uk.sd <- rep(0,k)
+  lk.sd <- rep(0,k)
+  for (j in 1:k) {
+    uk[j] <- (sk[j]-1)^(1/j)
+    uk.sd[j] <- abs((1/j)*(sk[j]-1)^(1/j-1))*sk.sd[j]/sqrt(N)
+    if (j==1) {
+      lk[j] <- 0
+      lk.sd[j] <- 0
+    } else {
+      lk[j] <- (sk[j]-1)/(sk[j-1]-1)
+      sk.cov <- cov(sk.sample[,j], sk.sample[,j-1])
+      sk.cov.mat <- matrix( c(sk.sd[j-1]^2, sk.cov, sk.cov, sk.sd[j]^2), ncol=2)
+      lk.sd[j] <- sqrt( rbind(c( -(sk[j]-1)/(sk[j-1]-1)^2, 1/(sk[j-1]-1) ))%*%
+                        sk.cov.mat  %*%
+                        cbind(c( -(sk[j]-1)/(sk[j-1]-1)^2, 1/(sk[j-1]-1) )) /N )
+    }
+  }
+  result <- rbind(sk, lk, uk, lk.sd, uk.sd)
+  colnames(result) <- seq(1,k)
+  return(result)
+  # return s_j, l_j, u_j, and the asymptotic standadard deviations of l_j and u_j for j=1,...,k
+}
+
+
+set.seed(11)
+eigenbound(k=5,N=1e5)
+
+```
+
+
+We may use the point estimates of $l_5$ (0.47) and $u_5$ (0.49) to estimate $\lambda_1$, whose true value is 0.5.
